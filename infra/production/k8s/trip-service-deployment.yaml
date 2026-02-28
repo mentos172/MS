@@ -17,6 +17,7 @@ spec:
           image: europe-west1-docker.pkg.dev/{{PROJECT_ID}}/ride-sharing/trip-service
           ports:
             - containerPort: 8083
+            - containerPort: 9093
           resources:
             requests:
               memory: "64Mi"
@@ -37,4 +38,7 @@ spec:
     - port: 8083
       name: http
       targetPort: 8083
+    - port: 9093
+      name: grpc
+      targetPort: 9093
   type: ClusterIP

@@ -20,7 +20,8 @@ func main() {
 	log.Println("Starting API Gateway")
 	//запускаем сервер и на все запросы отвечаем хэло
 	mux := http.NewServeMux()                                //вместо хттп встроенный мультиплексер
-	mux.HandleFunc(" POST /trip/preview", handleTripPreview) //  func(w http.ResponseWriter, r *http.Request) убрали это с кода и создали файл в это директории http
+	mux.HandleFunc("POST /trip/preview", enableCORS(handleTripPreview))// подключаем корс//mux.HandleFunc(" POST /trip/preview", handleTripPreview) //  func(w http.ResponseWriter, r *http.Request) убрали это с кода и создали файл в это директории http
+	mux.HandleFunc("POST /trip/start", enableCORS(handleTripStart)) // начало путеш
 	// веб сокет для водителя и для челикса
 	mux.HandleFunc("/ws/drivers", handleDriversWebSocket)
 	mux.HandleFunc("/ws/riders", handleRidersWebSocket)

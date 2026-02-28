@@ -1,7 +1,9 @@
 package main
 
-import "ride-sharing/shared/types"
-
+import (
+	pb "ride-sharing/shared/proto/trip"
+	"ride-sharing/shared/types"
+)
 type previewTripRequest struct {
 	UserID      string           `json:"userID"`
 	Pickup      types.Coordinate `json:"pickup"`
@@ -9,3 +11,33 @@ type previewTripRequest struct {
 }
 
 // в папке shared/types/ прописана логика по координатам
+// эта функция нужна для грпс
+// оа передает координаты нач точки и конеч использую протобаф
+
+//просмот поездки
+func (p *previewTripRequest) toProto() *pb.PreviewTripRequest {
+	return &pb.PreviewTripRequest{
+		UserID: p.UserID,
+		StartLocation: &pb.Coordinate{
+			Latitude:  p.Pickup.Latitude,
+			Longitude: p.Pickup.Longitude,
+		},
+		EndLocation: &pb.Coordinate{
+			Latitude:  p.Destination.Latitude,
+			Longitude: p.Destination.Longitude,
+		},
+	}
+}
+	//
+	type startTripRequest struct {
+	RideFareID string `json:"rideFareID"`
+	UserID     string `json:"userID"`
+}
+
+func (c *startTripRequest) toProto() *pb.CreateTripRequest {
+	return &pb.CreateTripRequest{
+		RideFareID: c.RideFareID,
+		UserID:     c.UserID,
+	}
+}
+

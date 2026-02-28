@@ -3,6 +3,7 @@ package repository
 //  Полезно для быстрого прототипирования или тестирования.
 import (
 	"context"
+	"fmt"
 	"ride-sharing/services/trip-service/internal/domain" //указали путь к файлу бизнес модели
 )
 // структура реализующая интерфейс репозитория (для работы без базы данных)
@@ -20,8 +21,23 @@ func NewInmemRepository() *inmemRepository {
 		rideFares: make(map[string]*domain.RideFareModel),
 	}
 }
+func (r *inmemRepository) GetRideFareByID(ctx context.Context, id string) (*domain.RideFareModel, error) {
+	fare, exist := r.rideFares[id]//ищем стоимость по ключу
+	if !exist {
+		return nil, fmt.Errorf("fare does not exist with ID: %s", id)
+	}
+
+	return fare, nil// возвращаем указатель на обьект
+}
 // добавляем новую поездку в карту трип, 
 func (r *inmemRepository) CreateTrip(ctx context.Context, trip *domain.TripModel) (*domain.TripModel, error) {
 	r.trips[trip.ID.Hex()] = trip //  преобразует ObjectID в строку вида "507f1f77bcf86cd799439011"
 	return trip, nil
+}
+
+//метод, принадлежащий типу inmemRepository.
+//Его задача — сохранить объект RideFareModel в внутреннее хранилище.
+func (r *inmemRepository) SaveRideFare(ctx context.Context, f *domain.RideFareModel) error {
+	r.rideFares[f.ID.Hex()] = f
+	return nil
 }

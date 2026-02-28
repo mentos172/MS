@@ -36,7 +36,7 @@ func (s *HttpHandler) HandleTripPreview(w http.ResponseWriter, r *http.Request) 
 	//формируем поездку передавая контекст и данные тарифа
 	//t, err := s.Service.CreateTrip(ctx, fare)
 	// передаем указатели на точку где чел и куда едет
-	t, err := s.Service.GetRoute(ctx, &reqBody.Pickup, &reqBody.Destination)
+	t, err := s.Service.GetRoute(ctx, &reqBody.Pickup, &reqBody.Destination, true)
 	if err != nil {
 		log.Println(err)
 	}
