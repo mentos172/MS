@@ -15,16 +15,19 @@ import (
 	//"ride-sharing/services/trip-service/internal/service"
 	"syscall"
 	//"time"
+		"ride-sharing/services/trip-service/internal/infrastructure/events"
 	"ride-sharing/services/trip-service/internal/infrastructure/grpc"
 	"ride-sharing/services/trip-service/internal/infrastructure/repository"
 	"ride-sharing/services/trip-service/internal/service"
+	"ride-sharing/shared/env"
+	"ride-sharing/shared/messaging"
 	grpcserver "google.golang.org/grpc"
 )
 
 var GrpcAddr = ":9093"
 func main() {
 	//ctx := context.Background() во 2 версии убирается
-
+rabbitMqURI := env.GetString("RABBITMQ_URI", "amqp://user:user@rabbitmq:5672/")
 	inmemRepo := repository.NewInmemRepository() //создание репозитория который хранит данные
 
 	svc := service.NewService(inmemRepo) // создаем экземпляр сервиса биз логики - он принемает репозиторий
@@ -75,11 +78,20 @@ ctx, cancel := context.WithCancel(context.Background())
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	// RabbitMQ connection
+	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rabbitmq.Close()
+
+	log.Println("Starting RabbitMQ connection")
 	///select {
 	///case err := <-serverErrors:
 	///	log.Printf("Error starting server: %v", err)
+	publisher := events.NewTripEventPublisher(rabbitmq)
 grpcServer := grpcserver.NewServer()
-grpc.NewGRPCHandler(grpcServer, svc) // прописываем хэндлер
+grpc.NewGRPCHandler(grpcServer, svc, publisher) // прописываем хэндлер
 	///case sig := <-shutdown:
 		///log.Printf("Server is shutting down due to %v signal", sig)
 

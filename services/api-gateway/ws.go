@@ -5,23 +5,27 @@ import (
 	"net/http"
 	"ride-sharing/services/api-gateway/grpc_clients"
 	"ride-sharing/shared/contracts"
-	
+	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/proto/driver"
 
-	"github.com/gorilla/websocket"
+	//"github.com/gorilla/websocket"
 )
 
-// упгрейдер, объект который переводит хттп на вебсокет
+/// упгрейдер, объект который переводит хттп на вебсокет
+/// после добавления вебсокет конечкшона не нужен
+///var upgrader = websocket.Upgrader{
+	///CheckOrigin: func(r *http.Request) bool {
+		///return true
+	///},
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-} // чекориджин установлен в тру значит что любые источники могут подключаться
+	var (
+	connManager = messaging.NewConnectionManager()
+)
+// чекориджин установлен в тру значит что любые источники могут подключаться
 // функция которая обрабатывает соединение вызывается при подключении пасс
-func handleRidersWebSocket(w http.ResponseWriter, r *http.Request) {
+func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
 	//упгрейдин с хттп до веб сокета если ошибка то логируем
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := connManager.Upgrade(w, r)
 	if err != nil {
 		log.Printf("WebSocket upgrade failed: %v", err)
 		return
@@ -34,6 +38,9 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Println("No user ID provided")
 		return
 	}
+		// Add connection to manager
+	connManager.Add(userID, conn)
+	defer connManager.Remove(userID)
 	// бесконечный цикл
 	// читаем сообщения от клиента
 	// при ошибке цикл завершится
@@ -51,8 +58,8 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // обработчик для водителя
 // http.ResponseWriter это хттп интерфейсы
-func handleDriversWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
+	conn, err := connManager.Upgrade(w, r)
 	if err != nil {
 		log.Printf("WebSocket upgrade failed: %v", err)
 		return
@@ -71,6 +78,8 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Println("No package slug provided")
 		return
 	}
+	// Add connection to manager
+	connManager.Add(userID, conn)
 	//структура описывающая данные водителя
 	///type Driver struct {
 		///Id             string `json:"id"`
@@ -87,6 +96,7 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Closing connections
 	defer func() {
+		connManager.Remove(userID)
 		driverService.Client.UnregisterDriver(ctx, &driver.RegisterDriverRequest{
 			DriverID:    userID,
 			PackageSlug: packageSlug,
@@ -106,8 +116,11 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	//сообщение для клиента
-	msg := contracts.WSMessage{
-		Type: "driver.cmd.register",
+	//msg := contracts.WSMessage{
+	//	Type: "driver.cmd.register",
+		if err := connManager.SendMessage(userID, contracts.WSMessage{
+		Type: contracts.DriverCmdRegister,
+		
 		///Data: Driver{
 			///Id:             userID,
 			///Name:           "Tiago",
@@ -116,11 +129,33 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request) {
 		///	PackageSlug:    packageSlug,
 		///},
 		Data: driverData.Driver,
-	}
+	
 	// отправляем сообщение клиенту
-	if err := conn.WriteJSON(msg); err != nil {
+	//if err := conn.WriteJSON(msg); err != nil {
+	}); err != nil {
 		log.Printf("Error sending message: %v", err)
 		return
+	}
+	// Initialize queue consumers
+	//Создаёт список очередей (queues) — в ваш список входит messaging.DriverCmdTripRequestQueue.
+//Перебирает все очереди в цикле for.
+//Для каждой очереди:
+//Создаёт потребителя (consumer) через messaging.NewQueueConsumer, передавая:
+//rb — видимо, это ваш RabbitMQ канал или соединение,
+//connManager — менеджер соединений,
+//q — название очереди.
+//После этого запускает потребителя командой consumer.Start().
+//Проверяет ошибку и, если есть, логирует сообщение о неудаче запуска.
+	queues := []string{
+		messaging.DriverCmdTripRequestQueue,
+	}
+
+	for _, q := range queues {
+		consumer := messaging.NewQueueConsumer(rb, connManager, q)
+
+		if err := consumer.Start(); err != nil {
+			log.Printf("Failed to start consumer for queue: %s: err: %v", q, err)
+		}
 	}
 	// цикл для получения сообщений от водителя
 	for {

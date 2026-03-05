@@ -16,6 +16,17 @@ type TripModel struct { //описание поездки
 	RideFare *RideFareModel // указатель на модель с информацией о стоимости поездки (RideFareModel),
 Driver   *pb.TripDriver// указатель на водителя используя протобаф
 }
+//для передачи джейсоном в рабите
+func (t *TripModel) ToProto() *pb.Trip {
+	return &pb.Trip{
+		Id:           t.ID.Hex(),
+		UserID:       t.UserID,
+		SelectedFare: t.RideFare.ToProto(),
+		Status:       t.Status,
+		Driver:       t.Driver,
+		Route:        t.RideFare.Route.ToProto(),
+	}
+}
 //интерфейс для определения работы с базой данных
 type TripRepository interface {
 	//создает новую поездку и 

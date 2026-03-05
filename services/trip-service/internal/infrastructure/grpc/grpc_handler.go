@@ -8,7 +8,7 @@ import (
 	"ride-sharing/services/trip-service/internal/domain"
 	pb "ride-sharing/shared/proto/trip"
 	"ride-sharing/shared/types"
-
+"ride-sharing/services/trip-service/internal/infrastructure/events"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -19,11 +19,13 @@ type gRPCHandler struct {
 	pb.UnimplementedTripServiceServer
 
 	service domain.TripService
+	publisher *events.TripEventPublisher // для рабит передачи сообщ
 }
 // создание обработчика
-func NewGRPCHandler(server *grpc.Server, service domain.TripService) *gRPCHandler {
+func NewGRPCHandler(server *grpc.Server, service domain.TripService, publisher *events.TripEventPublisher) *gRPCHandler {
 	handler := &gRPCHandler{// получаем уже созданный грпс сервер и сервис биз-логики
 		service: service,
+			publisher: publisher,
 	}
 
 	pb.RegisterTripServiceServer(server, handler)//Создаёт экземпляр обработчика, регистрирует его в gRPC сервере.
@@ -49,6 +51,10 @@ func (h *gRPCHandler) CreateTrip(ctx context.Context, req *pb.CreateTripRequest)
 	}
 
 	// Add a comment at the end of the function to publish an event on the Async Comms module.
+	if err := h.publisher.PublishTripCreated(ctx, trip); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to publish the trip created event: %v", err)
+	}
+	
 //возвращает ID созданной поездки в виде строки.
 	return &pb.CreateTripResponse{
 		TripID: trip.ID.Hex(),

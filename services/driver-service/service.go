@@ -28,7 +28,22 @@ func NewService() *Service {
 		drivers: make([]*driverInMap, 0),
 	}
 }
+//поиск и возврат подходящего (первого попавш) водителя
+func (s *Service) FindAvailableDrivers(packageType string) []string {
+	var matchingDrivers []string
 
+	for _, driver := range s.drivers {
+		if driver.Driver.PackageSlug == packageType {
+			matchingDrivers = append(matchingDrivers, driver.Driver.Id)
+		}
+	}
+
+	if len(matchingDrivers) == 0 {
+		return []string{}
+	}
+
+	return matchingDrivers
+}
 //Service — это структура, которая содержит список драйверов drivers (пример — список активных водителей).
 //Этот список защищен мьютексом mu для безопасной работы в многопоточной среде.
 //В функции регистрируется новый драйвер и добавляется в список, а при удалении — он удаляется из этого списка.

@@ -8,23 +8,39 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
+"ride-sharing/shared/messaging"
 	"ride-sharing/shared/env" //модуль в котором переменные
 )
 
 var (
 	httpAddr = env.GetString("HTTP_ADDR", ":8081") // читаем переменну, и если ее нет то случаем порт
+rabbitMqURI = env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
+//Вы получаете значение переменной окружения "RABBITMQ_URI".
+//Если переменная не установлена, то используется значение по умолчанию:
+//"amqp://guest:guest@rabbitmq:5672/".
 )
 
 func main() {
 	log.Println("Starting API Gateway")
 	//запускаем сервер и на все запросы отвечаем хэло
-	mux := http.NewServeMux()                                //вместо хттп встроенный мультиплексер
+	mux := http.NewServeMux()  
+	// RabbitMQ connection
+	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rabbitmq.Close()
+
+	log.Println("Starting RabbitMQ connection")                              //вместо хттп встроенный мультиплексер
 	mux.HandleFunc("POST /trip/preview", enableCORS(handleTripPreview))// подключаем корс//mux.HandleFunc(" POST /trip/preview", handleTripPreview) //  func(w http.ResponseWriter, r *http.Request) убрали это с кода и создали файл в это директории http
 	mux.HandleFunc("POST /trip/start", enableCORS(handleTripStart)) // начало путеш
 	// веб сокет для водителя и для челикса
-	mux.HandleFunc("/ws/drivers", handleDriversWebSocket)
-	mux.HandleFunc("/ws/riders", handleRidersWebSocket)
+	mux.HandleFunc("/ws/drivers", func(w http.ResponseWriter, r *http.Request) {
+		handleDriversWebSocket(w, r, rabbitmq)
+	})
+	mux.HandleFunc("/ws/riders", func(w http.ResponseWriter, r *http.Request) {
+		handleRidersWebSocket(w, r, rabbitmq)
+	})
 	//{
 	//	w.WriteHeader(http.StatusOK)
 	//	w.Write([]byte("Hello from API Gateway"))
