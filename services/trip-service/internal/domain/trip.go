@@ -7,6 +7,7 @@ import (
 tripTypes "ride-sharing/services/trip-service/pkg/types"
 pb "ride-sharing/shared/proto/trip"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	pbd "ride-sharing/shared/proto/driver"
 )
 
 type TripModel struct { //описание поездки 
@@ -34,6 +35,8 @@ type TripRepository interface {
 	// трип модел указатель на модель который надо сохранить
 	SaveRideFare(ctx context.Context, f *RideFareModel) error
 	GetRideFareByID(ctx context.Context, id string) (*RideFareModel, error)// возврат стоимостипо айди
+    GetTripByID(ctx context.Context, id string) (*TripModel, error)
+	UpdateTrip(ctx context.Context, tripID string, status string, driver *pbd.Driver) error
 }
 // интерфейс описывает бизнес логику как работать с поездками
 type TripService interface {
@@ -51,5 +54,10 @@ EstimatePackagesPriceWithRoute(route *tripTypes.OsrmApiResponse) []*RideFareMode
 GetAndValidateFare(ctx context.Context, fareID, userID string) (*RideFareModel, error)
 //получить информацию о стоимости (RideFareModel) по fareID, 
 //проверить её валидность, и возможно убедиться, что она принадлежит указанному пользователю (userID).
+//Получает информацию о поездке по её уникальному идентификатору (id).
+GetTripByID(ctx context.Context, id string) (*TripModel, error)
+//Обновляет информацию о конкретной поездке по tripID.
+//В частности, устанавливает новый статус (status), и привязывает драйвера (driver).	
+UpdateTrip(ctx context.Context, tripID string, status string, driver *pbd.Driver) error
 }
 

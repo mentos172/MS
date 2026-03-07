@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"ride-sharing/services/api-gateway/grpc_clients"
@@ -41,6 +42,21 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging
 		// Add connection to manager
 	connManager.Add(userID, conn)
 	defer connManager.Remove(userID)
+		// Initialize queue consumers
+		//  создаетс очередь с ключем NotifyDriverNoDriversFoundQueue.
+	queues := []string{
+		messaging.NotifyDriverNoDriversFoundQueue,
+		messaging.NotifyDriverAssignQueue, // ключ для водителя
+	}
+//для каждой очереди создаете консьюмера (потребителя) с помощью функции NewQueueConsumer,
+//  затем запускаете его методом Start(). — Если запуск неудачен — выводите ошибку в лог.
+	for _, q := range queues {
+		consumer := messaging.NewQueueConsumer(rb, connManager, q)
+
+		if err := consumer.Start(); err != nil {
+			log.Printf("Failed to start consumer for queue: %s: err: %v", q, err)
+		}
+	}
 	// бесконечный цикл
 	// читаем сообщения от клиента
 	// при ошибке цикл завершится
@@ -164,7 +180,50 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 			log.Printf("Error reading message: %v", err)
 			break
 		}
+//обрабатывает входящие сообщения из очереди, разбирает их и,
+//  в зависимости от типа, либо игнорирует, либо пересылает дальше.
+//Описывает сообщение, которое ожидается в формате JSON.
+//Type — строка, указывающая тип сообщения.
+//Data — сырые данные сообщения, представленные как JSON (json.RawMessage), 
+//чтобы можно было их позже обработать или переслать без предварительного разбора.
+		type driverMessage struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+//Полученное сообщение (message) — байтовое поле.
+//Пытаемся распарсить его в структуру driverMsg.
+//В случае ошибки — логируем и переходим к следующему сообщению.
 
-		log.Printf("Received message: %s", message)
+		var driverMsg driverMessage
+		if err := json.Unmarshal(message, &driverMsg); err != nil {
+			log.Printf("Error unmarshaling driver message: %v", err)
+			continue
+		}
+
+		// Handle the different message type
+		//V
+		switch driverMsg.Type {
+		case contracts.DriverCmdLocation:
+			// Handle driver location update in the future
+			// местоположение водителя не юзаем сча
+			continue
+		case contracts.DriverCmdTripAccept, contracts.DriverCmdTripDecline:
+			// Forward the message to RabbitMQ
+			//Эти типы сообщений пересылаются в систему RabbitMQ для дальнейшей обработки.
+//Используют функцию rb.PublishMessage, передавая:
+//ctx — контекст выполнения.
+//driverMsg.Type — тип сообщения.
+//contracts.AmqpMessage — структура сообщения для публикации, включающая:
+//OwnerID — идентификатор владельца (например, пользователя или водителя).
+//Data — сырые данные сообщения.
+			if err := rb.PublishMessage(ctx, driverMsg.Type, contracts.AmqpMessage{
+				OwnerID: userID,
+				Data:    driverMsg.Data,
+			}); err != nil {
+				log.Printf("Error publishing message to RabbitMQ: %v", err)
+			}
+		default:
+			log.Printf("Unknown message type: %s", driverMsg.Type)
+		}
 	}
 }

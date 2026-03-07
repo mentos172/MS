@@ -182,7 +182,33 @@ if err := r.declareAndBindQueue(
 	); err != nil {
 		return err
 	}
+if err := r.declareAndBindQueue(
+		DriverTripResponseQueue,
+		// указаны ключи которые попадут сюда сообщения
+		[]string{contracts.DriverCmdTripAccept, contracts.DriverCmdTripDecline},
+		TripExchange,
+	); err != nil {
+		return err
+	}
 
+	if err := r.declareAndBindQueue(
+		NotifyDriverNoDriversFoundQueue,
+		[]string{contracts.TripEventNoDriversFound},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+	//declareAndBindQueue — функция, которая отвечает за:
+//Создание очереди с именем NotifyDriverAssignQueue.
+//Связывание этой очереди с обменником TripExchange по 
+//маршрутизаторам contracts.TripEventDriverAssigned.
+	if err := r.declareAndBindQueue(
+		NotifyDriverAssignQueue,
+		[]string{contracts.TripEventDriverAssigned},
+		TripExchange,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 //Создает очередь с именем queueName.

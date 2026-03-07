@@ -7,6 +7,7 @@ import (
     "encoding/json"
     "ride-sharing/shared/contracts"
 	"github.com/rabbitmq/amqp091-go"
+	"math/rand"
 )
 //Структура хранит ссылку на вашу реализацию RabbitMQ.
 //Конструктор создает новую tripConsumer.
@@ -65,8 +66,11 @@ func (c *tripConsumer) Listen() error {
 
 		return nil
 	}
-// выбор первого подходящего
-	suitableDriverID := suitableIDs[0]
+// выбор random подходящего
+		// Get a random index from the matching drivers
+	randomIndex := rand.Intn(len(suitableIDs))
+
+	suitableDriverID := suitableIDs[randomIndex]
 //Оборачиваем payload в JSON для отправки в сообщение.
 	marshalledEvent, err := json.Marshal(payload)
 	if err != nil {

@@ -90,6 +90,10 @@ ctx, cancel := context.WithCancel(context.Background())
 	///case err := <-serverErrors:
 	///	log.Printf("Error starting server: %v", err)
 	publisher := events.NewTripEventPublisher(rabbitmq)
+	// Start driver consumer
+	driverConsumer := events.NewDriverConsumer(rabbitmq, svc)
+	go driverConsumer.Listen()
+	// старт грпс
 grpcServer := grpcserver.NewServer()
 grpc.NewGRPCHandler(grpcServer, svc, publisher) // прописываем хэндлер
 	///case sig := <-shutdown:
