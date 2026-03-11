@@ -1,22 +1,27 @@
 package messaging
+
 // нужно для того чтобы в каждом сервисе не перепрописывать подключение рабитмк
 import (
 	"context"
-	"log"
-	"fmt"
 	"encoding/json"
+	"fmt"
+	"log"
 	"ride-sharing/shared/contracts"
-	amqp "github.com/rabbitmq/amqp091-go"// импорт клиентской библеотеки
+
+	amqp "github.com/rabbitmq/amqp091-go" // импорт клиентской библеотеки
 )
+
 // переменная для обменника можно и без нее
 const (
 	TripExchange = "trip"
 )
+
 // делаем структуру которая, которая содержит соединение с брокером
 type RabbitMQ struct {
-	conn    *amqp.Connection// указатель на обьект подключения
-		Channel *amqp.Channel // подключение канала для отправки сообщений
+	conn    *amqp.Connection // указатель на обьект подключения
+	Channel *amqp.Channel    // подключение канала для отправки сообщений
 }
+
 // Функция для создания нового клиента RabbitMQ с соединением по указанному URI
 func NewRabbitMQ(uri string) (*RabbitMQ, error) {
 	conn, err := amqp.Dial(uri) // Пытаемся установить соединение с RabbitMQ по URI
@@ -29,27 +34,29 @@ func NewRabbitMQ(uri string) (*RabbitMQ, error) {
 		conn.Close()
 		return nil, fmt.Errorf("failed to create channel: %v", err)
 	}
-// Создаем экземпляр RabbitMQ со установленным соединением
+	// Создаем экземпляр RabbitMQ со установленным соединением
 	rmq := &RabbitMQ{
 		conn:    conn, // присваиваем соединение полю conn
-		Channel: ch, // нужно для закрытия
+		Channel: ch,   // нужно для закрытия
 	}
-// если ошибка по передаче данных то закрыть 
+	// если ошибка по передаче данных то закрыть
 	if err := rmq.setupExchangesAndQueues(); err != nil {
 		// Clean up if setup fails
 		rmq.Close()
 		return nil, fmt.Errorf("failed to setup exchanges and queues: %v", err)
 	}
-//Возвращаем созданный объект RabbitMQ и nil ошибку
+	//Возвращаем созданный объект RabbitMQ и nil ошибку
 	return rmq, nil
 }
+
 // получаем сообщение и задержку или таймаут(контекст)
 type MessageHandler func(context.Context, amqp.Delivery) error
-//Метод для объекта RabbitMQ.
-//Принимает:
-//queueName — название очереди для прослушки.
-//handler — функцию-обработчик для каждого сообщения.
-//Возвращает ошибку, если возникла проблема.
+
+// Метод для объекта RabbitMQ.
+// Принимает:
+// queueName — название очереди для прослушки.
+// handler — функцию-обработчик для каждого сообщения.
+// Возвращает ошибку, если возникла проблема.
 func (r *RabbitMQ) ConsumeMessages(queueName string, handler MessageHandler) error {
 	// Set prefetch count to 1 for fair dispatch
 	// This tells RabbitMQ not to give more than one message to a service at a time.
@@ -72,21 +79,21 @@ func (r *RabbitMQ) ConsumeMessages(queueName string, handler MessageHandler) err
 		nil,       // args
 	)
 	//Вызывается Consume, который начинает слушать указанную очередь.
-//Возвращается канал msgs, через который поступают сообщения.
-//Если ошибка — метод возвращает её.
+	//Возвращается канал msgs, через который поступают сообщения.
+	//Если ошибка — метод возвращает её.
 	if err != nil {
 		return err
 	}
-//создвется базовый контекст
+	//создвется базовый контекст
 	ctx := context.Background()
-// запуск прослушивания горутины
-//В отдельной горутине происходит бесконечный цикл (for msg := range msgs).
-//Каждое сообщение обрабатывается вызовом handler.
-//Если в обработчике возникла ошибка, программа завершится с фатальным логом (log.Fatalf).
+	// запуск прослушивания горутины
+	//В отдельной горутине происходит бесконечный цикл (for msg := range msgs).
+	//Каждое сообщение обрабатывается вызовом handler.
+	//Если в обработчике возникла ошибка, программа завершится с фатальным логом (log.Fatalf).
 	go func() {
 		for msg := range msgs {
 			log.Printf("Received a message: %s", msg.Body)
-// контроль сообщений
+			// контроль сообщений
 			if err := handler(ctx, msg); err != nil {
 				log.Printf("ERROR: Failed to handle message: %v. Message body: %s", err, msg.Body)
 				// Nack the message. Set requeue to false to avoid immediate redelivery loops.
@@ -94,7 +101,7 @@ func (r *RabbitMQ) ConsumeMessages(queueName string, handler MessageHandler) err
 				if nackErr := msg.Nack(false, false); nackErr != nil {
 					log.Printf("ERROR: Failed to Nack message: %v", nackErr)
 				}
-				
+
 				// Continue to the next message
 				continue
 			}
@@ -108,6 +115,7 @@ func (r *RabbitMQ) ConsumeMessages(queueName string, handler MessageHandler) err
 
 	return nil
 }
+
 // отправка как раз таки самого сообщения
 func (r *RabbitMQ) PublishMessage(ctx context.Context, routingKey string, message contracts.AmqpMessage) error {
 	log.Printf("Publishing message with routing key: %s", routingKey)
@@ -126,17 +134,18 @@ func (r *RabbitMQ) PublishMessage(ctx context.Context, routingKey string, messag
 		false,        // mandatory
 		false,        // immediate
 		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        jsonMsg,
+			ContentType:  "text/plain",
+			Body:         jsonMsg,
 			DeliveryMode: amqp.Persistent, //для сохрания
-		})// структура указывающая содержимое сообщения
+		}) // структура указывающая содержимое сообщения
 }
+
 // насстройка очереди
-//Публикует сообщение в обменник TripExchange.
-//Использует PublishWithContext, что позволяет управлять тайм-аутами и отменами.
-//В теле сообщения — переданный message.
-//Устанавливает DeliveryMode: amqp.Persistent — сообщение сохранится даже после перезапуска RabbitMQ.
-//Журналит, какой routing key используют.
+// Публикует сообщение в обменник TripExchange.
+// Использует PublishWithContext, что позволяет управлять тайм-аутами и отменами.
+// В теле сообщения — переданный message.
+// Устанавливает DeliveryMode: amqp.Persistent — сообщение сохранится даже после перезапуска RabbitMQ.
+// Журналит, какой routing key используют.
 func (r *RabbitMQ) setupExchangesAndQueues() error {
 	//_, err := r.Channel.QueueDeclare(
 	//	"hello", // name
@@ -158,9 +167,9 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 	if err != nil {
 		return fmt.Errorf("failed to declare exchange: %s: %v", TripExchange, err)
 	}
-// обьявление и связывание очередей
-//Создает обменник TripExchange типа "topic" — это шаблонный обменник, позволяющий маршрутизировать сообщения по сложным правилам.
-//Через declareAndBindQueue создает очередь и связывает ее с этим обменником по указанным routing key (TripEventCreated, TripEventDriverNotInterested).
+	// обьявление и связывание очередей
+	//Создает обменник TripExchange типа "topic" — это шаблонный обменник, позволяющий маршрутизировать сообщения по сложным правилам.
+	//Через declareAndBindQueue создает очередь и связывает ее с этим обменником по указанным routing key (TripEventCreated, TripEventDriverNotInterested).
 	if err := r.declareAndBindQueue(
 		FindAvailableDriversQueue,
 		[]string{
@@ -171,18 +180,18 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 		return err
 	}
 	//r.declareAndBindQueue — функция, которая, скорее всего, объявляет очередь и связывает её с обменником (exchange).
-//DriverCmdTripRequestQueue — название самой очереди, которую нужно создать.
-//[]string{contracts.DriverCmdTripRequest} — список маршрутов (routing keys), на которые очередь будет подписана.
-//TripTrade — название обменника (exchange), с которым связывается очередь.
+	//DriverCmdTripRequestQueue — название самой очереди, которую нужно создать.
+	//[]string{contracts.DriverCmdTripRequest} — список маршрутов (routing keys), на которые очередь будет подписана.
+	//TripTrade — название обменника (exchange), с которым связывается очередь.
 
-if err := r.declareAndBindQueue(
+	if err := r.declareAndBindQueue(
 		DriverCmdTripRequestQueue,
 		[]string{contracts.DriverCmdTripRequest},
 		TripExchange,
 	); err != nil {
 		return err
 	}
-if err := r.declareAndBindQueue(
+	if err := r.declareAndBindQueue(
 		DriverTripResponseQueue,
 		// указаны ключи которые попадут сюда сообщения
 		[]string{contracts.DriverCmdTripAccept, contracts.DriverCmdTripDecline},
@@ -199,9 +208,9 @@ if err := r.declareAndBindQueue(
 		return err
 	}
 	//declareAndBindQueue — функция, которая отвечает за:
-//Создание очереди с именем NotifyDriverAssignQueue.
-//Связывание этой очереди с обменником TripExchange по 
-//маршрутизаторам contracts.TripEventDriverAssigned.
+	//Создание очереди с именем NotifyDriverAssignQueue.
+	//Связывание этой очереди с обменником TripExchange по
+	//маршрутизаторам contracts.TripEventDriverAssigned.
 	if err := r.declareAndBindQueue(
 		NotifyDriverAssignQueue,
 		[]string{contracts.TripEventDriverAssigned},
@@ -209,11 +218,34 @@ if err := r.declareAndBindQueue(
 	); err != nil {
 		return err
 	}
+	if err := r.declareAndBindQueue(
+		PaymentTripResponseQueue,
+		[]string{contracts.PaymentCmdCreateSession},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+
+	if err := r.declareAndBindQueue(
+		NotifyPaymentSessionCreatedQueue,
+		[]string{contracts.PaymentEventSessionCreated},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+	if err := r.declareAndBindQueue(
+		NotifyPaymentSuccessQueue,
+		[]string{contracts.PaymentEventSuccess},
+		TripExchange,
+	); err != nil {
+		return err
+	}
 	return nil
 }
-//Создает очередь с именем queueName.
-//Для каждого типа сообщения (messageTypes) связывает очередь с обменником по маршрутам (routing keys).
-//Использует цикл — для каждой темы (msg) вызывает QueueBind, связывая очередь с обменником.
+
+// Создает очередь с именем queueName.
+// Для каждого типа сообщения (messageTypes) связывает очередь с обменником по маршрутам (routing keys).
+// Использует цикл — для каждой темы (msg) вызывает QueueBind, связывая очередь с обменником.
 func (r *RabbitMQ) declareAndBindQueue(queueName string, messageTypes []string, exchange string) error {
 	q, err := r.Channel.QueueDeclare(
 		queueName, // name
@@ -227,7 +259,7 @@ func (r *RabbitMQ) declareAndBindQueue(queueName string, messageTypes []string, 
 	if err != nil {
 		log.Fatal(err)
 	}
-for _, msg := range messageTypes {
+	for _, msg := range messageTypes {
 		if err := r.Channel.QueueBind(
 			q.Name,   // queue name
 			msg,      // routing key
@@ -241,9 +273,10 @@ for _, msg := range messageTypes {
 
 	return nil
 }
+
 // Метод для закрытия соединения с RabbitMQ
 func (r *RabbitMQ) Close() {
-	if r.conn != nil {  // Проверяем, что соединение не равно nil
+	if r.conn != nil { // Проверяем, что соединение не равно nil
 		r.conn.Close() //закрываем
 	}
 	if r.Channel != nil {

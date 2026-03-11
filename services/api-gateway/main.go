@@ -6,24 +6,43 @@ import (
 	"net/http" // работа с созданием сервера
 	"os"
 	"os/signal"
+	"ride-sharing/shared/env" //модуль в котором переменные
+	"ride-sharing/shared/messaging"
+	"ride-sharing/shared/tracing"
 	"syscall"
 	"time"
-"ride-sharing/shared/messaging"
-	"ride-sharing/shared/env" //модуль в котором переменные
 )
 
 var (
-	httpAddr = env.GetString("HTTP_ADDR", ":8081") // читаем переменну, и если ее нет то случаем порт
-rabbitMqURI = env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
-//Вы получаете значение переменной окружения "RABBITMQ_URI".
-//Если переменная не установлена, то используется значение по умолчанию:
-//"amqp://guest:guest@rabbitmq:5672/".
+	httpAddr    = env.GetString("HTTP_ADDR", ":8081") // читаем переменну, и если ее нет то случаем порт
+	rabbitMqURI = env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
+
+// Вы получаете значение переменной окружения "RABBITMQ_URI".
+// Если переменная не установлена, то используется значение по умолчанию:
+// "amqp://guest:guest@rabbitmq:5672/".
 )
 
 func main() {
 	log.Println("Starting API Gateway")
 	//запускаем сервер и на все запросы отвечаем хэло
-	mux := http.NewServeMux()  
+
+	// Initialize Tracing
+	tracerCfg := tracing.Config{
+		ServiceName:    "api-gateway",
+		Environment:    env.GetString("ENVIRONMENT", "development"),
+		JaegerEndpoint: env.GetString("JAEGER_ENDPOINT", "http://jaeger:14268/api/traces"),
+	}
+
+	sh, err := tracing.InitTracer(tracerCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize the tracer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer sh(ctx)
+
+	mux := http.NewServeMux()
 	// RabbitMQ connection
 	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
 	if err != nil {
@@ -31,16 +50,19 @@ func main() {
 	}
 	defer rabbitmq.Close()
 
-	log.Println("Starting RabbitMQ connection")                              //вместо хттп встроенный мультиплексер
-	mux.HandleFunc("POST /trip/preview", enableCORS(handleTripPreview))// подключаем корс//mux.HandleFunc(" POST /trip/preview", handleTripPreview) //  func(w http.ResponseWriter, r *http.Request) убрали это с кода и создали файл в это директории http
-	mux.HandleFunc("POST /trip/start", enableCORS(handleTripStart)) // начало путеш
+	log.Println("Starting RabbitMQ connection")                                                               //вместо хттп встроенный мультиплексер
+	mux.Handle("POST /trip/preview", tracing.WrapHandlerFunc(enableCORS(handleTripPreview), "/trip/preview")) // подключаем корс//mux.HandleFunc(" POST /trip/preview", handleTripPreview) //  func(w http.ResponseWriter, r *http.Request) убрали это с кода и создали файл в это директории http
+	mux.Handle("POST /trip/start", tracing.WrapHandlerFunc(enableCORS(handleTripStart), "/trip/start"))       // начало путеш
 	// веб сокет для водителя и для челикса
-	mux.HandleFunc("/ws/drivers", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/ws/drivers", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleDriversWebSocket(w, r, rabbitmq)
-	})
-	mux.HandleFunc("/ws/riders", func(w http.ResponseWriter, r *http.Request) {
+	}, "/ws/drivers"))
+	mux.Handle("/ws/riders", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRidersWebSocket(w, r, rabbitmq)
-	})
+	}, "/ws/riders"))
+	mux.Handle("/webhook/stripe", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleStripeWebhook(w, r, rabbitmq)
+	}, "/webhook/stripe"))
 	//{
 	//	w.WriteHeader(http.StatusOK)
 	//	w.Write([]byte("Hello from API Gateway"))

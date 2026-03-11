@@ -27,6 +27,11 @@ spec:
               memory: "128Mi"
               cpu: "200m"
           env:
+            - name: JAEGER_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  key: JAEGER_ENDPOINT
+                  name: app-config
             - name: STRIPE_SUCCESS_URL
               valueFrom:
                 configMapKeyRef:
@@ -39,11 +44,11 @@ spec:
                   key: STRIPE_CANCEL_URL
 
             # Stripe credentials
-            # - name: STRIPE_SECRET_KEY
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: stripe-secrets
-            #       key: stripe-secret-key
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                 secretKeyRef:
+                   name: stripe-secrets
+                   key: stripe-secret-key
 
             # RabbitMQ credentials
             - name: RABBITMQ_URI

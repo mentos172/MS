@@ -1,5 +1,6 @@
 package events
-//Этот код реализует потребителя сообщений на роутинг-кейсе "ответ водителя" (принятие или отказ от поездки) 
+
+//Этот код реализует потребителя сообщений на роутинг-кейсе "ответ водителя" (принятие или отказ от поездки)
 // через RabbitMQ, и реагирует на эти события.
 import (
 	"context"
@@ -13,7 +14,8 @@ import (
 
 	"github.com/rabbitmq/amqp091-go"
 )
-//driverConsumer — структура, которая содержит подключение к RabbitMQ 
+
+// driverConsumer — структура, которая содержит подключение к RabbitMQ
 // и сервис для работы с поездками (domain.TripService).
 type driverConsumer struct {
 	rabbitmq *messaging.RabbitMQ
@@ -26,12 +28,13 @@ func NewDriverConsumer(rabbitmq *messaging.RabbitMQ, service domain.TripService)
 		service:  service,
 	}
 }
-//Listen() — запускает цикл прослушивания сообщений из очереди messaging.DriverTripResponseQueue.
+
+// Listen() — запускает цикл прослушивания сообщений из очереди messaging.DriverTripResponseQueue.
 func (c *driverConsumer) Listen() error {
 	return c.rabbitmq.ConsumeMessages(messaging.DriverTripResponseQueue, func(ctx context.Context, msg amqp091.Delivery) error {
 		//Распарсивает из байтов JSON в структуру contracts.AmqpMessage.
-        //Распарсивает Data в messaging.DriverTripResponseData.
-        //В зависимости от RoutingKey (тип реакции драйвера) — вызывает нужный обработчик (например, handleTripAccepted).
+		//Распарсивает Data в messaging.DriverTripResponseData.
+		//В зависимости от RoutingKey (тип реакции драйвера) — вызывает нужный обработчик (например, handleTripAccepted).
 		var message contracts.AmqpMessage
 		if err := json.Unmarshal(msg.Body, &message); err != nil {
 			log.Printf("Failed to unmarshal message: %v", err)
@@ -68,7 +71,7 @@ func (c *driverConsumer) Listen() error {
 // если водитель отклонил мы пробуем найти другого водилу
 func (c *driverConsumer) handleTripDeclined(ctx context.Context, tripID, riderID string) error {
 	// When a driver declines, we should try to find another driver
-	
+
 	trip, err := c.service.GetTripByID(ctx, tripID)
 	if err != nil {
 		return err
@@ -130,12 +133,34 @@ func (c *driverConsumer) handleTripAccepted(ctx context.Context, tripID string, 
 	//Опубликовать событие о подтверждении, чтобы уведомить заказчика (рейтера).
 	if err := c.rabbitmq.PublishMessage(ctx, contracts.TripEventDriverAssigned, contracts.AmqpMessage{
 		OwnerID: trip.UserID,
-		Data: marshalledTrip,
+		Data:    marshalledTrip,
 	}); err != nil {
 		return err
 	}
 
 	// TODO: Notify the payment service to start a payment link
+	//создаете структуру PaymentTripResponseData с нужными полями.
+	//Используете json.Marshal, чтобы преобразовать структуру в JSON-байты.
+	//Если возникнет ошибка, она будет возвращена (обычно — далее в вызывающую функцию).
+	marshalledPayload, err := json.Marshal(messaging.PaymentTripResponseData{
+		TripID:   tripID,
+		UserID:   trip.UserID,
+		DriverID: driver.Id,
+		Amount:   trip.RideFare.TotalPriceInCents,
+		Currency: "USD",
+	})
+	//вызываете метод PublishMessage.
+	//Передаете контекст ctx.
+	//Название команды/маршрута: contracts.PaymentCmdCreateSession.
+	//Объект сообщения AmqpMessage с OwnerID и сериализованными данными.
+	if err := c.rabbitmq.PublishMessage(ctx, contracts.PaymentCmdCreateSession,
+		contracts.AmqpMessage{
+			OwnerID: trip.UserID,
+			Data:    marshalledPayload,
+		},
+	); err != nil {
+		return err
+	}
 
 	return nil
 }

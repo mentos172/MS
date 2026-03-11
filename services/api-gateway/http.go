@@ -3,13 +3,25 @@ package main
 import (
 	///"bytes" // поток - передача данных по частям
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
-	"ride-sharing/shared/contracts"
 	"ride-sharing/services/api-gateway/grpc_clients"
+	"ride-sharing/shared/contracts"
+	"ride-sharing/shared/env"
+	"ride-sharing/shared/messaging"
+
+	"ride-sharing/shared/tracing"
+
+	"github.com/stripe/stripe-go/v81"
+	"github.com/stripe/stripe-go/v81/webhook"
 )
 
+var tracer = tracing.GetTracer("api-gateway") //tracing
+
 func handleTripStart(w http.ResponseWriter, r *http.Request) {
+	ctx, span := tracer.Start(r.Context(), "handleTripStart")
+	defer span.End()
 	var reqBody startTripRequest
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		http.Error(w, "failed to parse JSON data", http.StatusBadRequest)
@@ -29,7 +41,7 @@ func handleTripStart(w http.ResponseWriter, r *http.Request) {
 	// Don't forget to close the client to avoid resource leaks!
 	defer tripService.Close()
 
-	trip, err := tripService.Client.CreateTrip(r.Context(), reqBody.toProto())
+	trip, err := tripService.Client.CreateTrip(ctx, reqBody.toProto())
 	if err != nil {
 		log.Printf("Failed to start a trip: %v", err)
 		http.Error(w, "Failed to start trip", http.StatusInternalServerError)
@@ -40,8 +52,11 @@ func handleTripStart(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, response)
 }
+
 // обработчик получает данные для ответа клиенту и полученный запрос
 func handleTripPreview(w http.ResponseWriter, r *http.Request) {
+	ctx, span := tracer.Start(r.Context(), "handleTripPreview") //traving
+	defer span.End()
 	var reqBody previewTripRequest //считываем тело запроса и распарсиваем
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		http.Error(w, "failed to parse JSON data", http.StatusBadRequest)
@@ -68,26 +83,24 @@ func handleTripPreview(w http.ResponseWriter, r *http.Request) {
 
 	// Don't forget to close the client to avoid resource leaks!
 	defer tripService.Close()
-	
-	
-	
+
 	// TODO: Call trip service
 	// отправляем запрос к другому сервису передавая уже джсон тело с инфой из изначального запроса
 	///resp, err := http.Post("http://trip-service:8083/preview", "application/json", reader)
-	tripPreview, err := tripService.Client.PreviewTrip(r.Context(), reqBody.toProto())// работа через грпс
+	tripPreview, err := tripService.Client.PreviewTrip(ctx, reqBody.toProto()) // работа через грпс
 	if err != nil {
 		///log.Print(err)
 		///return
-	///}
+		///}
 
-	///defer resp.Body.Close()
-	//деколируем json ответ который пришел от трип сервиса
-	// если парсинга не удался то ошибка
+		///defer resp.Body.Close()
+		//деколируем json ответ который пришел от трип сервиса
+		// если парсинга не удался то ошибка
 
-	///var respBody any
-	///if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+		///var respBody any
+		///if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
 		///http.Error(w, "failed to parse JSON data from trip service", http.StatusBadRequest)
-			log.Printf("Failed to preview a trip: %v", err)
+		log.Printf("Failed to preview a trip: %v", err)
 		http.Error(w, "Failed to preview trip", http.StatusInternalServerError)
 		return
 	}
@@ -115,3 +128,76 @@ func handleTripPreview(w http.ResponseWriter, r *http.Request) {
 // Записать структуру в JSON
 //.Десериализация (Unmarshal)	Преобразование текста в объект
 // 	Считать JSON в структуру Go
+
+func handleStripeWebhook(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
+	ctx, span := tracer.Start(r.Context(), "handleTripPreview")
+	defer span.End()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		return
+	}
+	defer r.Body.Close()
+
+	webhookKey := env.GetString("STRIPE_WEBHOOK_KEY", "")
+	if webhookKey == "" {
+		log.Printf("Webhook key is required")
+		return
+	}
+
+	event, err := webhook.ConstructEventWithOptions(
+		body,
+		r.Header.Get("Stripe-Signature"),
+		webhookKey,
+		webhook.ConstructEventOptions{
+			IgnoreAPIVersionMismatch: true,
+		},
+	)
+	if err != nil {
+		log.Printf("Error verifying webhook signature: %v", err)
+		http.Error(w, "Invalid signature", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Received Stripe event: %v", event)
+
+	switch event.Type {
+	case "checkout.session.completed":
+		var session stripe.CheckoutSession
+
+		err := json.Unmarshal(event.Data.Raw, &session)
+		if err != nil {
+			log.Printf("Error parsing webhook JSON: %v", err)
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		payload := messaging.PaymentStatusUpdateData{
+			TripID:   session.Metadata["trip_id"],
+			UserID:   session.Metadata["user_id"],
+			DriverID: session.Metadata["driver_id"],
+		}
+
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			log.Printf("Error marshalling payload: %v", err)
+			http.Error(w, "Failed to marshal payload", http.StatusInternalServerError)
+			return
+		}
+
+		message := contracts.AmqpMessage{
+			OwnerID: session.Metadata["user_id"],
+			Data:    payloadBytes,
+		}
+
+		if err := rb.PublishMessage(
+			ctx,
+			contracts.PaymentEventSuccess,
+			message,
+		); err != nil {
+			log.Printf("Error publishing payment event: %v", err)
+			http.Error(w, "Failed to publish payment event", http.StatusInternalServerError)
+			return
+		}
+	}
+}

@@ -8,20 +8,20 @@ import (
 	"ride-sharing/shared/contracts"
 	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/proto/driver"
-
 	//"github.com/gorilla/websocket"
 )
 
 /// упгрейдер, объект который переводит хттп на вебсокет
 /// после добавления вебсокет конечкшона не нужен
 ///var upgrader = websocket.Upgrader{
-	///CheckOrigin: func(r *http.Request) bool {
-		///return true
-	///},
+///CheckOrigin: func(r *http.Request) bool {
+///return true
+///},
 
-	var (
+var (
 	connManager = messaging.NewConnectionManager()
 )
+
 // чекориджин установлен в тру значит что любые источники могут подключаться
 // функция которая обрабатывает соединение вызывается при подключении пасс
 func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
@@ -39,17 +39,18 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging
 		log.Println("No user ID provided")
 		return
 	}
-		// Add connection to manager
+	// Add connection to manager
 	connManager.Add(userID, conn)
 	defer connManager.Remove(userID)
-		// Initialize queue consumers
-		//  создаетс очередь с ключем NotifyDriverNoDriversFoundQueue.
+	// Initialize queue consumers
+	//  создаетс очередь с ключем NotifyDriverNoDriversFoundQueue.
 	queues := []string{
 		messaging.NotifyDriverNoDriversFoundQueue,
 		messaging.NotifyDriverAssignQueue, // ключ для водителя
+		messaging.NotifyPaymentSessionCreatedQueue,
 	}
-//для каждой очереди создаете консьюмера (потребителя) с помощью функции NewQueueConsumer,
-//  затем запускаете его методом Start(). — Если запуск неудачен — выводите ошибку в лог.
+	//для каждой очереди создаете консьюмера (потребителя) с помощью функции NewQueueConsumer,
+	//  затем запускаете его методом Start(). — Если запуск неудачен — выводите ошибку в лог.
 	for _, q := range queues {
 		consumer := messaging.NewQueueConsumer(rb, connManager, q)
 
@@ -98,13 +99,13 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 	connManager.Add(userID, conn)
 	//структура описывающая данные водителя
 	///type Driver struct {
-		///Id             string `json:"id"`
-		///Name           string `json:"name"`
-		///ProfilePicture string `json:"profilePicture"`
-		///CarPlate       string `json:"carPlate"`
-		///PackageSlug    string `json:"packageSlug"`
+	///Id             string `json:"id"`
+	///Name           string `json:"name"`
+	///ProfilePicture string `json:"profilePicture"`
+	///CarPlate       string `json:"carPlate"`
+	///PackageSlug    string `json:"packageSlug"`
 	ctx := r.Context()
-//вызывается функция для создания клиента, которая подключается к сервису драйверов.
+	//вызывается функция для создания клиента, которая подключается к сервису драйверов.
 	driverService, err := grpc_clients.NewDriverServiceClient()
 	if err != nil {
 		log.Fatal(err)
@@ -119,10 +120,10 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 		})
 
 		driverService.Close()
-		
+
 		log.Println("Driver unregistered: ", userID)
 	}()
-//регистрация водителя
+	//регистрация водителя
 	driverData, err := driverService.Client.RegisterDriver(ctx, &driver.RegisterDriverRequest{
 		DriverID:    userID,
 		PackageSlug: packageSlug,
@@ -134,34 +135,34 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 	//сообщение для клиента
 	//msg := contracts.WSMessage{
 	//	Type: "driver.cmd.register",
-		if err := connManager.SendMessage(userID, contracts.WSMessage{
+	if err := connManager.SendMessage(userID, contracts.WSMessage{
 		Type: contracts.DriverCmdRegister,
-		
+
 		///Data: Driver{
-			///Id:             userID,
-			///Name:           "Tiago",
-			///ProfilePicture: util.GetRandomAvatar(1),
-			///CarPlate:       "ABC123",
+		///Id:             userID,
+		///Name:           "Tiago",
+		///ProfilePicture: util.GetRandomAvatar(1),
+		///CarPlate:       "ABC123",
 		///	PackageSlug:    packageSlug,
 		///},
 		Data: driverData.Driver,
-	
-	// отправляем сообщение клиенту
-	//if err := conn.WriteJSON(msg); err != nil {
+
+		// отправляем сообщение клиенту
+		//if err := conn.WriteJSON(msg); err != nil {
 	}); err != nil {
 		log.Printf("Error sending message: %v", err)
 		return
 	}
 	// Initialize queue consumers
 	//Создаёт список очередей (queues) — в ваш список входит messaging.DriverCmdTripRequestQueue.
-//Перебирает все очереди в цикле for.
-//Для каждой очереди:
-//Создаёт потребителя (consumer) через messaging.NewQueueConsumer, передавая:
-//rb — видимо, это ваш RabbitMQ канал или соединение,
-//connManager — менеджер соединений,
-//q — название очереди.
-//После этого запускает потребителя командой consumer.Start().
-//Проверяет ошибку и, если есть, логирует сообщение о неудаче запуска.
+	//Перебирает все очереди в цикле for.
+	//Для каждой очереди:
+	//Создаёт потребителя (consumer) через messaging.NewQueueConsumer, передавая:
+	//rb — видимо, это ваш RabbitMQ канал или соединение,
+	//connManager — менеджер соединений,
+	//q — название очереди.
+	//После этого запускает потребителя командой consumer.Start().
+	//Проверяет ошибку и, если есть, логирует сообщение о неудаче запуска.
 	queues := []string{
 		messaging.DriverCmdTripRequestQueue,
 	}
@@ -180,19 +181,19 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 			log.Printf("Error reading message: %v", err)
 			break
 		}
-//обрабатывает входящие сообщения из очереди, разбирает их и,
-//  в зависимости от типа, либо игнорирует, либо пересылает дальше.
-//Описывает сообщение, которое ожидается в формате JSON.
-//Type — строка, указывающая тип сообщения.
-//Data — сырые данные сообщения, представленные как JSON (json.RawMessage), 
-//чтобы можно было их позже обработать или переслать без предварительного разбора.
+		//обрабатывает входящие сообщения из очереди, разбирает их и,
+		//  в зависимости от типа, либо игнорирует, либо пересылает дальше.
+		//Описывает сообщение, которое ожидается в формате JSON.
+		//Type — строка, указывающая тип сообщения.
+		//Data — сырые данные сообщения, представленные как JSON (json.RawMessage),
+		//чтобы можно было их позже обработать или переслать без предварительного разбора.
 		type driverMessage struct {
 			Type string          `json:"type"`
 			Data json.RawMessage `json:"data"`
 		}
-//Полученное сообщение (message) — байтовое поле.
-//Пытаемся распарсить его в структуру driverMsg.
-//В случае ошибки — логируем и переходим к следующему сообщению.
+		//Полученное сообщение (message) — байтовое поле.
+		//Пытаемся распарсить его в структуру driverMsg.
+		//В случае ошибки — логируем и переходим к следующему сообщению.
 
 		var driverMsg driverMessage
 		if err := json.Unmarshal(message, &driverMsg); err != nil {
@@ -210,12 +211,12 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 		case contracts.DriverCmdTripAccept, contracts.DriverCmdTripDecline:
 			// Forward the message to RabbitMQ
 			//Эти типы сообщений пересылаются в систему RabbitMQ для дальнейшей обработки.
-//Используют функцию rb.PublishMessage, передавая:
-//ctx — контекст выполнения.
-//driverMsg.Type — тип сообщения.
-//contracts.AmqpMessage — структура сообщения для публикации, включающая:
-//OwnerID — идентификатор владельца (например, пользователя или водителя).
-//Data — сырые данные сообщения.
+			//Используют функцию rb.PublishMessage, передавая:
+			//ctx — контекст выполнения.
+			//driverMsg.Type — тип сообщения.
+			//contracts.AmqpMessage — структура сообщения для публикации, включающая:
+			//OwnerID — идентификатор владельца (например, пользователя или водителя).
+			//Data — сырые данные сообщения.
 			if err := rb.PublishMessage(ctx, driverMsg.Type, contracts.AmqpMessage{
 				OwnerID: userID,
 				Data:    driverMsg.Data,

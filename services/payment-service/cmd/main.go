@@ -7,22 +7,41 @@ import (
 	"os/signal"
 	"syscall"
 
+	"ride-sharing/services/payment-service/internal/events"
+	"ride-sharing/services/payment-service/internal/infrastructure/stripe"
+	"ride-sharing/services/payment-service/internal/service"
 	"ride-sharing/services/payment-service/pkg/types"
 	"ride-sharing/shared/env"
 	"ride-sharing/shared/messaging"
+	"ride-sharing/shared/tracing"
 )
 
 var GrpcAddr = env.GetString("GRPC_ADDR", ":9004")
 
-//Чтение переменной окружения RABBITMQ_URI — URI для подключения к RabbitMQ.
-//Создаётся context.Context с функцией отмены cancel() для корректного завершения работы всего сервиса.
-//Горутинa слушает системные сигналы (SIGINT, SIGTERM) и вызывает cancel(), что инициирует завершение сервиса.
+// Чтение переменной окружения RABBITMQ_URI — URI для подключения к RabbitMQ.
+// Создаётся context.Context с функцией отмены cancel() для корректного завершения работы всего сервиса.
+// Горутинa слушает системные сигналы (SIGINT, SIGTERM) и вызывает cancel(), что инициирует завершение сервиса.
 func main() {
-	rabbitMqURI := env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
+	//rabbitMqURI := env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
+
+	// Initialize Tracing
+	tracerCfg := tracing.Config{
+		ServiceName:    "payment-service",
+		Environment:    env.GetString("ENVIRONMENT", "development"),
+		JaegerEndpoint: env.GetString("JAEGER_ENDPOINT", "http://jaeger:14268/api/traces"),
+	}
+
+	sh, err := tracing.InitTracer(tracerCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize the tracer: %v", err)
+	}
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	defer sh(ctx)
+
+	rabbitMqURI := env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -35,9 +54,9 @@ func main() {
 
 	// Stripe config
 	//Переменная appURL — базовый URL приложения.
-    //Конфигурация Stripe:
-    //StripeSecretKey — секретный ключ API.
-    //URL-ы для успешного завершения и отмены платежа, с умолчанием, основанным на appURL.
+	//Конфигурация Stripe:
+	//StripeSecretKey — секретный ключ API.
+	//URL-ы для успешного завершения и отмены платежа, с умолчанием, основанным на appURL.
 	stripeCfg := &types.PaymentConfig{
 		StripeSecretKey: env.GetString("STRIPE_SECRET_KEY", ""),
 		SuccessURL:      env.GetString("STRIPE_SUCCESS_URL", appURL+"?payment=success"),
@@ -49,10 +68,18 @@ func main() {
 		return
 	}
 
+	// Stripe processor
+	paymentProcessor := stripe.NewStripeClient(stripeCfg)
+
+	// Service
+	svc := service.NewPaymentService(paymentProcessor)
+
+	//log.Println(svc)
+
 	// RabbitMQ connection
 	//Создается соединение с RabbitMQ через функцию messaging.NewRabbitMQ.
-    //В случае ошибки — программа завершается.
-//defer rabbitmq.Close() — при завершении программы закрывает соединение.
+	//В случае ошибки — программа завершается.
+	//defer rabbitmq.Close() — при завершении программы закрывает соединение.
 	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
 	if err != nil {
 		log.Fatal(err)
@@ -60,6 +87,10 @@ func main() {
 	defer rabbitmq.Close()
 
 	log.Println("Starting RabbitMQ connection")
+
+	// Trip Consumer
+	tripConsumer := events.NewTripConsumer(rabbitmq, svc)
+	go tripConsumer.Listen()
 
 	// Wait for shutdown signal
 	<-ctx.Done()
