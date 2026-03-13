@@ -66,7 +66,7 @@ func main() {
 	// Starting the gRPC server
 	//Создается новый gRPC-сервер.
 	// NewGrpcHandler — регистрация ваших gRPC-сервисов, реализованных на основе svc.
-	grpcServer := grpcserver.NewServer()
+	grpcServer := grpcserver.NewServer(tracing.WithTracingInterceptors()...)
 	NewGrpcHandler(grpcServer, svc)
 	consumer := NewTripConsumer(rabbitmq, svc)
 	// запуск слушателя в отдельной горутине

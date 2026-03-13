@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"log"
 	"ride-sharing/shared/contracts"
+	"ride-sharing/shared/retry" // for dlq
+	"ride-sharing/shared/tracing"
 
 	amqp "github.com/rabbitmq/amqp091-go" // импорт клиентской библеотеки
 )
 
 // переменная для обменника можно и без нее
 const (
-	TripExchange = "trip"
+	TripExchange       = "trip"
+	DeadLetterExchange = "dlx"
 )
 
 // делаем структуру которая, которая содержит соединение с брокером
@@ -85,30 +88,59 @@ func (r *RabbitMQ) ConsumeMessages(queueName string, handler MessageHandler) err
 		return err
 	}
 	//создвется базовый контекст
-	ctx := context.Background()
+	//ctx := context.Background()
 	// запуск прослушивания горутины
 	//В отдельной горутине происходит бесконечный цикл (for msg := range msgs).
 	//Каждое сообщение обрабатывается вызовом handler.
 	//Если в обработчике возникла ошибка, программа завершится с фатальным логом (log.Fatalf).
 	go func() {
 		for msg := range msgs {
-			log.Printf("Received a message: %s", msg.Body)
-			// контроль сообщений
-			if err := handler(ctx, msg); err != nil {
-				log.Printf("ERROR: Failed to handle message: %v. Message body: %s", err, msg.Body)
-				// Nack the message. Set requeue to false to avoid immediate redelivery loops.
-				// Consider a dead-letter exchange (DLQ) or a more sophisticated retry mechanism for production.
-				if nackErr := msg.Nack(false, false); nackErr != nil {
-					log.Printf("ERROR: Failed to Nack message: %v", nackErr)
+			if err := tracing.TracedConsumer(msg, func(ctx context.Context, d amqp.Delivery) error {
+				//  dlq/log.Printf("Received a message: %s", msg.Body)
+				// контроль сообщений
+				// dlq --- if err := handler(ctx, msg); err != nil {
+				// dlq ---	log.Printf("ERROR: Failed to handle message: %v. Message body: %s", err, msg.Body)
+				//	// Nack the message. Set requeue to false to avoid immediate redelivery loops.
+				//	// Consider a dead-letter exchange (DLQ) or a more sophisticated retry mechanism for production.
+				//	if nackErr := msg.Nack(false, false); nackErr != nil {
+				//		log.Printf("ERROR: Failed to Nack message: %v", nackErr)
+
+				// DLQ
+				log.Printf("Received a message: %s", msg.Body)
+
+				cfg := retry.DefaultConfig()
+				err := retry.WithBackoff(ctx, cfg, func() error {
+					return handler(ctx, d)
+				})
+				if err != nil {
+					log.Printf("Message processing failed after %d retries for message ID: %s, err: %v", cfg.MaxRetries, d.MessageId, err)
+
+					// Add failure context before sending to the DLQ
+					headers := amqp.Table{}
+					if d.Headers != nil {
+						headers = d.Headers
+					}
+
+					headers["x-death-reason"] = err.Error()
+					headers["x-origin-exchange"] = d.Exchange
+					headers["x-original-routing-key"] = d.RoutingKey
+					headers["x-retry-count"] = cfg.MaxRetries
+					d.Headers = headers
+
+					// Reject without requeue - message will go to the DLQ
+					_ = d.Reject(false)
+					return err
 				}
 
 				// Continue to the next message
-				continue
-			}
-
-			// Only Ack if the handler succeeds
-			if ackErr := msg.Ack(false); ackErr != nil {
-				log.Printf("ERROR: Failed to Ack message: %v. Message body: %s", ackErr, msg.Body)
+				//continue
+				// Only Ack if the handler succeeds
+				if ackErr := msg.Ack(false); ackErr != nil {
+					log.Printf("ERROR: Failed to Ack message: %v. Message body: %s", ackErr, msg.Body)
+				}
+				return nil
+			}); err != nil {
+				log.Printf("Error processing message: %v", err)
 			}
 		}
 	}()
@@ -123,21 +155,79 @@ func (r *RabbitMQ) PublishMessage(ctx context.Context, routingKey string, messag
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %v", err)
 	}
+	msg := amqp.Publishing{
+		DeliveryMode: amqp.Persistent,
+		ContentType:  "application/json",
+		Body:         jsonMsg,
+	}
+
+	return tracing.TracedPublisher(ctx, TripExchange, routingKey, msg, r.publish)
+}
+func (r *RabbitMQ) publish(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) error {
 	// асинхронная пуьликация
 	return r.Channel.PublishWithContext(ctx,
 		//"",      // exchange название обменника пустое поле
 		//"hello", // routing key имя очереди куда попадет сообщение
 		//false,   // mandatory
 		//false,   // immediate
-		TripExchange, // exchange
-		routingKey,   // routing key
-		false,        // mandatory
-		false,        // immediate
-		amqp.Publishing{
-			ContentType:  "text/plain",
-			Body:         jsonMsg,
-			DeliveryMode: amqp.Persistent, //для сохрания
-		}) // структура указывающая содержимое сообщения
+		///TripExchange, // exchange
+		///routingKey,   // routing key
+		///false,        // mandatory
+		///false,        // immediate
+		///amqp.Publishing{
+		///ContentType:  "text/plain",
+		///Body:         jsonMsg,
+		///	DeliveryMode: amqp.Persistent, //для сохрания
+		///}) // структура указывающая содержимое сообщения
+		exchange,   // exchange
+		routingKey, // routing key
+		false,      // mandatory
+		false,      // immediate
+		msg,
+	)
+}
+
+func (r *RabbitMQ) setupDeadLetterExchange() error {
+	// Declare the dead letter exchange
+	err := r.Channel.ExchangeDeclare(
+		DeadLetterExchange,
+		"topic",
+		true,  // durable
+		false, // auto-deleted
+		false, // internal
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare dead letter exchange: %v", err)
+	}
+
+	// Declare the dead letter queue
+	q, err := r.Channel.QueueDeclare(
+		DeadLetterQueue,
+		true,  // durable
+		false, // delete when unused
+		false, // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare dead letter queue: %v", err)
+	}
+
+	// Bind the queue to the exchange with a wildcard routing key
+	err = r.Channel.QueueBind(
+		q.Name,
+		"#", // wildcard routing key to catch all messages
+		DeadLetterExchange,
+		false,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to bind dead letter queue: %v", err)
+	}
+
+	return nil
 }
 
 // насстройка очереди
@@ -155,6 +245,12 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 	//	false,   // no-wait
 	//	nil,     // arguments
 	//)
+
+	// First setup the DLQ exchange and queue
+	if err := r.setupDeadLetterExchange(); err != nil {
+		return err
+	}
+
 	err := r.Channel.ExchangeDeclare(
 		TripExchange, // name
 		"topic",      // type
@@ -247,13 +343,20 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 // Для каждого типа сообщения (messageTypes) связывает очередь с обменником по маршрутам (routing keys).
 // Использует цикл — для каждой темы (msg) вызывает QueueBind, связывая очередь с обменником.
 func (r *RabbitMQ) declareAndBindQueue(queueName string, messageTypes []string, exchange string) error {
+
+	// Add dead letter configuration
+	args := amqp.Table{
+		//"x-dead-letter-exchange": DeadLetterExchange, !!!!!! Выдает ошибку!!!!
+	}
+
 	q, err := r.Channel.QueueDeclare(
 		queueName, // name
 		true,      // durable
 		false,     // delete when unused
 		false,     // exclusive
 		false,     // no-wait
-		nil,       // arguments
+		//nil,       // arguments
+		args, // arguments with DLX config
 	)
 
 	if err != nil {
